@@ -54,6 +54,11 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    # If card argument is set, go through every card, otherwise, just do Pokemon
+    query = {"cardInfo.supertype" : "Pokémon"}
+    if args.card : 
+        query = {}
+
     output_dir = "./datasets"
     os.makedirs(output_dir, exist_ok=True)
 
@@ -74,7 +79,7 @@ if __name__ == "__main__":
         'cardInfo.supertype': 1
     }
 
-    for doc in tqdm(mongo_collection.find({}, projection)):
+    for doc in tqdm(mongo_collection.find(query, projection)):
         info = doc.get('cardInfo', {})
         set_name = info.get('set', {}).get('name', 'Unknown')
         series_name = info.get('set', {}).get('series', 'Unknown')
@@ -92,7 +97,7 @@ if __name__ == "__main__":
         try:
             response = requests.get(image_url, timeout=10)
             response.raise_for_status()
-            image = Image.open(BytesIO(response.content))
+            image = Image.open(BytesIO(response.content)).convert("RGBA") 
 
             filename = sanitize_filename(f"{series_name}_{set_name}_{card_name}_{number}.png")
 
