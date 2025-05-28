@@ -104,4 +104,4 @@ dist
 .tern-port
 
 # cardData
-packages/pokemon-dataset-downloader/dataset/*
+packages/model_builder/datasets/*
