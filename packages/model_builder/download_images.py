@@ -6,108 +6,116 @@ from tqdm import tqdm
 from dotenv import load_dotenv
 from PIL import Image
 from io import BytesIO
+import argparse
 
 from shared.set_stamp_coords import build_set_coords_map
 
-coords_map = build_set_coords_map()
-
-# Define crop box for 1st edition stamps: (left, upper, right, lower)
-first_edition_crop_box = (22, 438, 72, 474) 
-
 load_dotenv()
 
-mongo_uri=os.getenv('MONGO_CONNECTION_STRING')
-db_name="RemodeledTestDB"
-collection_name="Cards"
+sets_with_stamps = [
+    "Base", "Jungle", "Fossil", "Team Rocket", "Gym Heroes", "Gym Challenge",
+    "Neo Genesis", "Neo Discovery", "Neo Revelation", "Neo Destiny"
+]
 
-# Get the collection we will be querying
-client = MongoClient(mongo_uri)
-db = client[db_name]
-collection = db[collection_name]
+first_edition_crop_box = (22, 438, 72, 474)  # (left, upper, right, lower)
 
-# Base output directory
-output_dir = './datasets'
-cards_output_dir = output_dir + "/cards"
-sets_output_dir = output_dir + "/sets"
-first_edition_output_dir = output_dir + "/first_edition"
-stamp_folder = first_edition_output_dir + "/with_stamp"
-no_stamp_folder = first_edition_output_dir + "/without_stamp"
+def sanitize_filename(name: str) -> str:
+    return name.replace(" ", "_").replace("/", "_").replace(":", "_")
 
-# Ensure output directory exists
-os.makedirs(stamp_folder, exist_ok=True)
-os.makedirs(no_stamp_folder, exist_ok=True)
-os.makedirs(output_dir, exist_ok=True)
-os.makedirs(cards_output_dir, exist_ok=True)
-os.makedirs(sets_output_dir, exist_ok=True)
-os.makedirs(first_edition_output_dir, exist_ok=True)
+def set_up_cards_folder(base_dir):
+    path = os.path.join(base_dir, "cards")
+    os.makedirs(path, exist_ok=True)
+    return path
 
-# Identify sets with 1st edition stamps
-sets_with_stamps=["Base", "Jungle", "Fossil", "Team Rocket", "Gym Heroes", "Gym Challenge", "Neo Genesis", "Neo Discovery", "Neo Revelation", "Neo Destiny"]
-# query = {"cardInfo.supertype":"Pokémon", "cardInfo.set.name":{"$in":sets_with_stamps}}
+def set_up_first_edition_folders(base_dir):
+    base = os.path.join(base_dir, "first_edition")
+    stamp = os.path.join(base, "with_stamp")
+    no_stamp = os.path.join(base, "without_stamp")
+    for path in [base, stamp, no_stamp]:
+        os.makedirs(path, exist_ok=True)
+    return stamp, no_stamp
 
-# Download images
-# Item and Energy cards have 
-for doc in tqdm(collection.find({},{'cardInfo.set.name' : 1, 'cardInfo.set.series' : 1,'cardInfo.set.series' : 1, 'cardInfo.name' : 1, 'cardInfo.number' : 1, 'cardInfo.images' : 1, 'cardInfo.supertype' : 1})):
-    set_name = doc.get('cardInfo', {}).get('set', {}).get('name', 'Unknown')
-    series_name = doc.get('cardInfo', {}).get('set', {}).get('series', 'Unknown')
-    card_name = doc.get('cardInfo', {}).get('name', 'Unknown')
-    number = doc.get('cardInfo', {}).get('number', 'Unknown')
-    supertype = doc.get('cardInfo', {}).get('supertype', 'Unknown')
-    image_url = doc.get('cardInfo', {}).get('images', {}).get('large', 'Unknown')
+def set_up_sets_folder(base_dir):
+    path = os.path.join(base_dir, "sets")
+    os.makedirs(path, exist_ok=True)
+    return path
 
-    print(set_name + card_name + number)
+def initialize_mongo_collection():
+    mongo_uri = os.getenv("MONGO_CONNECTION_STRING")
+    client = MongoClient(mongo_uri)
+    db = client["RemodeledTestDB"]
+    return db["Cards"]
 
-    add_edition = False
-    add_sets = False
-    first_edition_folder = no_stamp_folder
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Download and crop card images.")
+    parser.add_argument("--card", action="store_true", help="Download full card images")
+    parser.add_argument("--first_edition", action="store_true", help="Crop and download 1st edition stamps")
+    parser.add_argument("--set", action="store_true", help="Crop and download set symbols")
 
+    args = parser.parse_args()
 
-    if series_name == "NP" : 
-        set_name = "Black Star Promos"
+    output_dir = "./datasets"
+    os.makedirs(output_dir, exist_ok=True)
 
-    if not image_url:
-        continue
+    mongo_collection = initialize_mongo_collection()
+    coords_map = build_set_coords_map()
 
-    try:
-        # Get the image
-        response = requests.get(image_url, timeout = 10)
-        response.raise_for_status()
+    # Setup folders
+    card_folder = set_up_cards_folder(output_dir) if args.card else None
+    stamp_folder, no_stamp_folder = set_up_first_edition_folders(output_dir) if args.first_edition else (None, None)
+    sets_output_folder = set_up_sets_folder(output_dir) if args.set else None
 
-        image =  Image.open(BytesIO(response.content))
+    projection = {
+        'cardInfo.set.name': 1,
+        'cardInfo.set.series': 1,
+        'cardInfo.name': 1,
+        'cardInfo.number': 1,
+        'cardInfo.images': 1,
+        'cardInfo.supertype': 1
+    }
 
-        parsed = urlparse(image_url)
-        filename = series_name + "_" + set_name + "_" + card_name + "_" + number + ".png"
-        filename = filename.replace(" ", "_")
+    for doc in tqdm(mongo_collection.find({}, projection)):
+        info = doc.get('cardInfo', {})
+        set_name = info.get('set', {}).get('name', 'Unknown')
+        series_name = info.get('set', {}).get('series', 'Unknown')
+        card_name = info.get('name', 'Unknown')
+        number = info.get('number', 'Unknown')
+        supertype = info.get('supertype', 'Unknown')
+        image_url = info.get('images', {}).get('large')
 
-        card_image_path = os.path.join(cards_output_dir, filename)
-        image.save(card_image_path)
+        if series_name == "NP":
+            set_name = "Black Star Promos"
 
-        if supertype == "Pokémon" :
-            ###### Set Stamps ######
-            # Open and crop the image of the set stamp
-            if not set_name :
-                folder = "unknown_set"
-            else : 
-                folder = series_name + "_" + set_name
-            set_folder = sets_output_dir + "/" + folder.replace(" ", "_")
-            os.makedirs(set_folder, exist_ok=True)
+        if not image_url:
+            continue
 
-            # Define crop box: (left, upper, right, lower)
-            crop_coords = coords_map.get(series_name)
-            set_crop_box = (crop_coords.left, crop_coords.upper, crop_coords.right, crop_coords.lower) 
+        try:
+            response = requests.get(image_url, timeout=10)
+            response.raise_for_status()
+            image = Image.open(BytesIO(response.content))
 
-            cropped_set_image = image.crop(set_crop_box)
-            image_path = os.path.join(set_folder, filename)
-            cropped_set_image.save(image_path)
+            filename = sanitize_filename(f"{series_name}_{set_name}_{card_name}_{number}.png")
 
-            ###### 1st Edition Stamps ######
-            # Crop and save the image to get the first edition stamp area
-            if set_name in sets_with_stamps :
-                first_edition_folder = stamp_folder
+            # Save full card image
+            if args.card:
+                image.save(os.path.join(card_folder, filename))
 
-            cropped_image = image.crop(first_edition_crop_box)
-            image_path = os.path.join(first_edition_folder, filename)
-            cropped_image.save(image_path)
-        
-    except Exception as e:
-        print(f"Failed to download {image_url}: {e}")
+            # 1st Edition stamp
+            if args.first_edition and supertype == "Pokémon":
+                target_folder = stamp_folder if set_name in sets_with_stamps else no_stamp_folder
+                cropped = image.crop(first_edition_crop_box)
+                cropped.save(os.path.join(target_folder, filename))
+
+            # Set symbol
+            if args.set and supertype == "Pokémon":
+                crop_coords = coords_map.get(series_name)
+                if crop_coords:
+                    crop_box = (crop_coords.left, crop_coords.upper, crop_coords.right, crop_coords.lower)
+                    cropped = image.crop(crop_box)
+                    folder_name = sanitize_filename(f"{series_name}_{set_name}") or "unknown_set"
+                    final_folder = os.path.join(sets_output_folder, folder_name)
+                    os.makedirs(final_folder, exist_ok=True)
+                    cropped.save(os.path.join(final_folder, filename))
+
+        except Exception as e:
+            print(f"Failed to process image: {image_url} - {e}")
